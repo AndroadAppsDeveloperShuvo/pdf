@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8" />
+  <title>IMAGE TO PDF GENARATORE</title>
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
+
+  <!-- jsPDF -->
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+
+  <!-- Toastify -->
+  <script src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css" />
+
+  <!-- QRCode -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+
+  <style>
+    body { font-family: Arial, sans-serif; background: #f0f4f8; padding: 20px; }
+    .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; }
+    input[type="file"] { margin-bottom: 20px; }
+    button { margin: 5px 10px 15px 0; padding: 10px 20px; font-size: 16px; border: none; border-radius: 5px; cursor: pointer; }
+    #downloadBtn { background: #4CAF50; color: white; }
+    #copyLinkBtn { background: #2196F3; color: white; display: none; }
+    #preview { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+    #preview img { height: 100px; border-radius: 6px; object-fit: contain; }
+    #qrcode-container { margin-top: 20px; text-align: center; }
+    #progressContainer { display: none; margin-bottom: 10px; }
+    #progressBar {
+      width: 100%;
+      background-color: #ddd;
+      border-radius: 5px;
+      overflow: hidden;
+      height: 20px;
+    }
+    #progressBar div {
+      height: 100%;
+      width: 0%;
+      background-color: #4CAF50;
+      text-align: center;
+      color: white;
+      line-height: 20px;
+      transition: width 0.3s ease;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>IMAGE TO PDF GENARATORE</h2>
+    <input type="file" id="images" multiple accept="image/*" />
+    <div id="preview"></div>
+
+    <div id="progressContainer">
+      <div id="progressBar"><div></div></div>
+    </div>
+
+    <button id="downloadBtn" disabled> ⬆️আপলোড করুন⬆️</button>
+    <button id="copyLinkBtn">🔗 লিংক কপি করুন</button>
+
+    <div id="qrcode-container">
+      <p id="qr-text" style="display:none;">QR কোড স্ক্যান করে PDF ডাউনলোড করুন:</p>
+      <canvas id="qrcode"></canvas>
+    </div>
+  </div>
+
+<script>
+  // Firebase Config
+  const firebaseConfig = {
+    apiKey: "AIzaSyDkqjA1Io411uidSZBLbYJlYHWGVY36zc8",
+    authDomain: "shuvo-all-tools.firebaseapp.com",
+    projectId: "shuvo-all-tools",
+    storageBucket: "shuvo-all-tools.appspot.com",
+    messagingSenderId: "475600173705",
+    appId: "1:475600173705:android:0251b1d46457dc4e806458"
+  };
+
+  // Initialize Firebase
+  firebase.initializeApp(firebaseConfig);
+  const storage = firebase.storage();
+
+  const imagesInput = document.getElementById('images');
+  const previewDiv = document.getElementById('preview');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const copyLinkBtn = document.getElementById('copyLinkBtn');
+  const qrText = document.getElementById('qr-text');
+  const qrCanvas = document.getElementById('qrcode');
+  const progressContainer = document.getElementById('progressContainer');
+  const progressBar = document.querySelector('#progressBar div');
+
+  let selectedFiles = [];
+  let pdfBlob = null;
+  let finalDownloadURL = '';
+
+  imagesInput.addEventListener('change', () => {
+    previewDiv.innerHTML = '';
+    qrText.style.display = 'none';
+    clearQRCode();
+    copyLinkBtn.style.display = 'none';
+    finalDownloadURL = '';
+    selectedFiles = Array.from(imagesInput.files);
+    if (selectedFiles.length === 0) {
+      downloadBtn.disabled = true;
+      return;
+    }
+    selectedFiles.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = document.createElement('img');
+        img.src = e.target.result;
+        previewDiv.appendChild(img);
+      };
+      reader.readAsDataURL(file);
+    });
+    downloadBtn.disabled = false;
+  });
+
+  downloadBtn.addEventListener('click', async () => {
+    qrText.style.display = 'none';
+    clearQRCode();
+    copyLinkBtn.style.display = 'none';
+    finalDownloadURL = '';
+    try {
+      await generatePDF();
+      if (pdfBlob) {
+        const url = await uploadPDF(pdfBlob);
+        finalDownloadURL = url;
+        showToast('PDF সফলভাবে আপলোড হয়েছে!', 'green');
+        generateQRCode(url);
+        copyLinkBtn.style.display = 'inline-block';
+      }
+    } catch (error) {
+      showToast('আপলোডে সমস্যা হয়েছে!', 'red');
+      console.error(error);
+    }
+  });
+
+  async function generatePDF() {
+    if (selectedFiles.length === 0) {
+      showToast('ছবি নির্বাচন করুন!', 'red');
+      throw new Error('No images selected');
+    }
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF();
+
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const file = selectedFiles[i];
+      const dataUrl = await readFileAsDataURL(file);
+      const img = new Image();
+      img.src = dataUrl;
+      await new Promise(resolve => {
+        img.onload = () => {
+          const pageWidth = pdf.internal.pageSize.getWidth();
+          const pageHeight = pdf.internal.pageSize.getHeight();
+          let imgWidth = pageWidth;
+          let imgHeight = (img.height * imgWidth) / img.width;
+          if (imgHeight > pageHeight) {
+            imgHeight = pageHeight;
+            imgWidth = (img.width * imgHeight) / img.height;
+          }
+          const x = (pageWidth - imgWidth) / 2;
+          const y = (pageHeight - imgHeight) / 2;
+          pdf.addImage(img, 'JPEG', x, y, imgWidth, imgHeight);
+          if (i < selectedFiles.length - 1) pdf.addPage();
+          resolve();
+        };
+      });
+    }
+    pdfBlob = pdf.output('blob');
+  }
+
+  function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = err => reject(err);
+      fr.readAsDataURL(file);
+    });
+  }
+
+  async function uploadPDF(pdfBlob) {
+    progressContainer.style.display = 'block';
+    progressBar.style.width = '0%';
+    const filename = `pdfs/images_${Date.now()}.pdf`;
+    const storageRef = storage.ref(filename);
+
+    return new Promise((resolve, reject) => {
+      const uploadTask = storageRef.put(pdfBlob);
+
+      uploadTask.on('state_changed',
+        snapshot => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          progressBar.style.width = progress + '%';
+          progressBar.textContent = Math.floor(progress) + '%';
+        },
+        error => {
+          progressContainer.style.display = 'none';
+          reject(error);
+        },
+        async () => {
+          progressContainer.style.display = 'none';
+          try {
+            const downloadURL = await uploadTask.snapshot.ref.getDownloadURL();
+            resolve(downloadURL);
+          } catch (e) {
+            reject(e);
+          }
+        }
+      );
+    });
+  }
+
+  function generateQRCode(url) {
+    qrText.style.display = 'block';
+    QRCode.toCanvas(qrCanvas, url, { width: 200 }, function (error) {
+      if (error) {
+        console.error(error);
+        showToast('QR কোড তৈরি করতে সমস্যা হয়েছে।', 'red');
+      }
+    });
+  }
+
+  function clearQRCode() {
+    const ctx = qrCanvas.getContext('2d');
+    ctx.clearRect(0, 0, qrCanvas.width, qrCanvas.height);
+  }
+
+  function showToast(message, color) {
+    Toastify({
+      text: message,
+      duration: 3500,
+      gravity: "top",
+      position: "center",
+      backgroundColor: color,
+    }).showToast();
+  }
+
+  // Clipboard copy with fallback
+  copyLinkBtn.addEventListener('click', () => {
+    if (!finalDownloadURL) return;
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(finalDownloadURL).then(() => {
+        showToast('লিংক কপি হয়েছে!', 'green');
+      }).catch(() => {
+        fallbackCopyTextToClipboard(finalDownloadURL);
+      });
+    } else {
+      fallbackCopyTextToClipboard(finalDownloadURL);
+    }
+  });
+
+  function fallbackCopyTextToClipboard(text) {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+
+    // অদৃশ্য রাখতে নিচের স্টাইল
+    textArea.style.position = "fixed";
+    textArea.style.top = "-9999px";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+
+    try {
+      const successful = document.execCommand('copy');
+      if(successful) showToast('লিংক কপি হয়েছে!', 'green');
+      else showToast('লিংক কপি করতে সমস্যা হয়েছে!', 'red');
+    } catch (err) {
+      showToast('লিংক কপি করতে সমস্যা হয়েছে!', 'red');
+    }
+
+    document.body.removeChild(textArea);
+  }
+</script>
+</body>
+</html>
